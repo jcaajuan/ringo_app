@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "698427665450",
+    "project_id": "ringo-backend",
+    "storage_bucket": "ringo-backend.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:698427665450:android:8dfb6763d931cace2e2753",
+        "android_client_info": {
+          "package_name": "com.example.ringo_app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "698427665450-05sv0rvi3ugsh15revmmn0rpmc3vkl8a.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAAvRkPcKQSPeNdlp3Bbn3QF7oLhhCLjtA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "698427665450-05sv0rvi3ugsh15revmmn0rpmc3vkl8a.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

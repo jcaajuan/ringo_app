@@ -1,0 +1,3 @@
+Coloca aqui los .mp3 de los canales de notificacion (nombres en minuscula):
+ringo_conductor_asignado.mp3, ringo_conductor_llego.mp3, ringo_mensaje.mp3, ringo_viaje_finalizado.mp3, ringo_viaje_cancelado.mp3
+Los mismos archivos tambien van en assets\sounds\. Ver assets\sounds\README.txt

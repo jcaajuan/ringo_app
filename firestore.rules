@@ -1,0 +1,461 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function estaLogueado() {
+      return request.auth != null;
+    }
+
+    function esAdmin() {
+      return estaLogueado() && (
+        (exists(/databases/$(database)/documents/usuarios/$(request.auth.uid))
+          && get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data.rol == 'admin')
+        ||
+        (exists(/databases/$(database)/documents/conductores/$(request.auth.uid))
+          && get(/databases/$(database)/documents/conductores/$(request.auth.uid)).data.rol == 'admin')
+      );
+    }
+
+    function esConductorAprobado() {
+      return exists(/databases/$(database)/documents/conductores/$(request.auth.uid))
+        && get(/databases/$(database)/documents/conductores/$(request.auth.uid)).data.estadoCuenta == 'aprobado';
+    }
+
+    match /usuarios/{userId} {
+      allow read, write: if estaLogueado() && request.auth.uid == userId;
+    }
+
+    match /conductores/{conductorId} {
+      function esDueno() {
+        return estaLogueado() && request.auth.uid == conductorId;
+      }
+
+      function soloPresencia() {
+        return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'disponible',
+          'estadoOperativo',
+          'estadoOperativoEn',
+          'ubicacion',
+          'rumbo',
+          'velocidadMps',
+          'precisionMetros',
+          'ubicacionActualizadaEn',
+        ]);
+      }
+
+      function guardaToken() {
+        return request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['fcmToken', 'fcmTokenActualizadoEn'])
+          && (
+            !('fcmToken' in request.resource.data)
+            || request.resource.data.fcmToken is string
+          );
+      }
+
+      function reenviaPerfil() {
+        return resource.data.estadoCuenta in ['pendiente', 'rechazado']
+          && request.resource.data.estadoCuenta == 'pendiente'
+          && request.resource.data.rol == 'conductor'
+          && request.resource.data.disponible == false
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'nombre',
+            'telefono',
+            'email',
+            'vehiculo',
+            'documentos',
+            'estadoCuenta',
+            'estadoOperativo',
+            'actualizadoEn',
+          ]);
+      }
+
+      function apruebaCuenta() {
+        return request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['estadoCuenta', 'documentos']);
+      }
+
+      allow create: if esDueno()
+        && request.resource.data.rol == 'conductor'
+        && request.resource.data.estadoCuenta == 'pendiente'
+        && request.resource.data.disponible == false
+        && request.resource.data.nombre is string
+        && request.resource.data.telefono is string
+        && request.resource.data.email is string;
+      allow get: if estaLogueado();
+      allow list: if esDueno() || esAdmin();
+      allow update: if (esAdmin() && apruebaCuenta())
+        || (esDueno() && soloPresencia())
+        || (esDueno() && reenviaPerfil())
+        || (esDueno() && guardaToken());
+      allow delete: if false;
+    }
+
+    match /presencia/{conductorId} {
+      allow read: if estaLogueado();
+      // Hora enviada por el cliente. serverTimestamp no pasa como timestamp
+      // en la regla y el conductor recibe permission-denied al conectarse.
+      allow create, update: if esConductorAprobado()
+        && request.auth.uid == conductorId
+        && request.resource.data.conectado is bool
+        && request.resource.data.tipoVehiculo in ['moto', 'carro']
+        && request.resource.data.vehiculo.tipo == request.resource.data.tipoVehiculo
+        && request.resource.data.vehiculo.keys().hasOnly(['tipo'])
+        && request.resource.data.actualizadoEn is timestamp
+        && request.resource.data.keys().hasOnly([
+          'conectado',
+          'tipoVehiculo',
+          'vehiculo',
+          'actualizadoEn',
+        ]);
+      allow delete: if false;
+    }
+
+    match /drivers_location/{driverId} {
+      function esDueno() {
+        return estaLogueado() && request.auth.uid == driverId;
+      }
+
+      function camposUbicacion() {
+        return [
+          'driverId',
+          'viajeId',
+          'latitud',
+          'longitud',
+          'ubicacion',
+          'heading',
+          'timestamp',
+          'actualizadoEn',
+        ];
+      }
+
+      allow read: if esDueno() || esAdmin();
+      allow create: if esDueno()
+        && request.resource.data.driverId == driverId
+        && request.resource.data.latitud is number
+        && request.resource.data.longitud is number
+        && request.resource.data.keys().hasOnly(camposUbicacion());
+      allow update: if esDueno()
+        && request.resource.data.driverId == driverId
+        && request.resource.data.latitud is number
+        && request.resource.data.longitud is number
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(camposUbicacion());
+      allow delete: if false;
+    }
+
+    match /service_rates/{servicioId} {
+      allow read: if estaLogueado();
+      allow create: if esAdmin()
+        && request.resource.data.nombre is string
+        && request.resource.data.ratePerKm is number
+        && request.resource.data.ratePerKm > 0
+        && request.resource.data.ratePerKm <= 99.99
+        && request.resource.data.keys().hasOnly(['nombre', 'ratePerKm', 'orden']);
+      allow update: if esAdmin()
+        && request.resource.data.nombre is string
+        && request.resource.data.ratePerKm is number
+        && request.resource.data.ratePerKm > 0
+        && request.resource.data.ratePerKm <= 99.99
+        && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['nombre', 'ratePerKm', 'orden', 'actualizadoEn']);
+      allow delete: if false;
+    }
+
+    match /settings/{docId} {
+      allow read: if estaLogueado();
+      allow create: if esAdmin()
+        && docId == 'exchange_rate'
+        && request.resource.data.vesRate is number
+        && request.resource.data.vesRate > 0
+        && request.resource.data.vesRate <= 1000000
+        && request.resource.data.keys().hasOnly(['vesRate', 'actualizadoEn']);
+      allow update: if esAdmin()
+        && docId == 'exchange_rate'
+        && request.resource.data.vesRate is number
+        && request.resource.data.vesRate > 0
+        && request.resource.data.vesRate <= 1000000
+        && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['vesRate', 'actualizadoEn']);
+      allow delete: if false;
+    }
+
+    match /operating_zones/{zonaId} {
+      allow read: if estaLogueado();
+
+      allow create: if esAdmin()
+        && request.resource.data.nombre is string
+        && request.resource.data.nombre.size() > 0
+        && request.resource.data.nombre.size() <= 60
+        && request.resource.data.latitud is number
+        && request.resource.data.latitud >= -90
+        && request.resource.data.latitud <= 90
+        && request.resource.data.longitud is number
+        && request.resource.data.longitud >= -180
+        && request.resource.data.longitud <= 180
+        && request.resource.data.radioKm is number
+        && request.resource.data.radioKm >= 0.1
+        && request.resource.data.radioKm <= 500
+        && request.resource.data.activa is bool
+        && request.resource.data.actualizadoEn == request.time
+        && request.resource.data.keys().hasOnly([
+          'nombre',
+          'latitud',
+          'longitud',
+          'radioKm',
+          'activa',
+          'actualizadoEn',
+        ]);
+
+      allow update: if esAdmin()
+        && request.resource.data.nombre is string
+        && request.resource.data.nombre.size() > 0
+        && request.resource.data.nombre.size() <= 60
+        && request.resource.data.latitud is number
+        && request.resource.data.latitud >= -90
+        && request.resource.data.latitud <= 90
+        && request.resource.data.longitud is number
+        && request.resource.data.longitud >= -180
+        && request.resource.data.longitud <= 180
+        && request.resource.data.radioKm is number
+        && request.resource.data.radioKm >= 0.1
+        && request.resource.data.radioKm <= 500
+        && request.resource.data.activa is bool
+        && request.resource.data.actualizadoEn == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'nombre',
+          'latitud',
+          'longitud',
+          'radioKm',
+          'activa',
+          'actualizadoEn',
+        ]);
+
+      allow delete: if esAdmin();
+    }
+
+    // Corte semanal del conductor: driver_weekly_balances/{driverId}_{yearWeek}.
+    // La app del conductor lo lee y lo escribe dentro de la transacción que finaliza el viaje.
+    match /driver_weekly_balances/{balanceId} {
+      function idPropio() {
+        return balanceId.matches(request.auth.uid + '_.*');
+      }
+
+      // `get`: la transacción de finalizar lee el balance aunque todavía no exista
+      // (primer viaje de la semana). Con el documento inexistente `resource` es null,
+      // así que aquí no se puede leer `resource.data`: se valida por el id.
+      allow get: if estaLogueado() && (esAdmin() || idPropio());
+
+      // `list`: consultas por `driverId` (panel del conductor) o del admin.
+      allow list: if estaLogueado() && (
+        esAdmin() || resource.data.driverId == request.auth.uid
+      );
+
+      allow create: if esConductorAprobado()
+        && request.resource.data.driverId == request.auth.uid
+        && request.resource.data.estadoLiquidacion == 'pendiente'
+        && request.resource.data.tripCount == 1;
+
+      allow update: if (
+        esConductorAprobado()
+        && resource.data.driverId == request.auth.uid
+        && request.resource.data.driverId == request.auth.uid
+        && request.resource.data.estadoLiquidacion == 'pendiente'
+        && request.resource.data.tripCount == resource.data.tripCount + 1
+      ) || (
+        esAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['estadoLiquidacion', 'liquidadoEn'])
+        && request.resource.data.estadoLiquidacion == 'pagado'
+      );
+
+      allow delete: if false;
+    }
+
+    match /pagos/{pagoId} {
+      allow read: if estaLogueado();
+      allow update: if estaLogueado();
+      allow create, delete: if false;
+    }
+
+    match /viajes/{viajeId} {
+      function esPasajero() {
+        return resource.data.userId == request.auth.uid;
+      }
+
+      function esConductorAsignado() {
+        return resource.data.get('conductorId', '') == request.auth.uid;
+      }
+
+      function tipoVehiculoConductor() {
+        return get(/databases/$(database)/documents/conductores/$(request.auth.uid)).data.vehiculo.tipo;
+      }
+
+      function esMoto() {
+        return tipoVehiculoConductor() in ['moto', 'mototaxi'];
+      }
+
+      function esCarro() {
+        return tipoVehiculoConductor() in ['carro', 'auto', 'vehiculo', 'vehículo', 'taxi'];
+      }
+
+      // Taxi solo a carro, moto taxi solo a moto, delivery a carro o moto.
+      function servicioCompatibleConConductor() {
+        return (resource.data.tipoServicio == 'taxi' && esCarro())
+          || (resource.data.tipoServicio == 'mototaxi' && esMoto())
+          || (resource.data.tipoServicio == 'delivery' && (esCarro() || esMoto()));
+      }
+
+      function aceptaPendiente() {
+        return resource.data.estado == 'pendiente'
+          && esConductorAprobado()
+          && servicioCompatibleConConductor()
+          && request.resource.data.estado == 'aceptado'
+          && request.resource.data.conductorId == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly([
+                'estado',
+                'conductorId',
+                'aceptadoAt',
+                'conductorNombre',
+                'conductorTelefono',
+                'vehiculoResumen',
+              ]);
+      }
+
+      function marcaRechazo() {
+        return resource.data.estado == 'pendiente'
+          && esConductorAprobado()
+          && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['rechazadoPor']);
+      }
+
+      function llegada() {
+        return esConductorAsignado()
+          && resource.data.estado == 'aceptado'
+          && request.resource.data.estado == 'llego'
+          && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['estado', 'llegoAt']);
+      }
+
+      function iniciaViaje() {
+        return esConductorAsignado()
+          && resource.data.estado == 'llego'
+          && request.resource.data.estado == 'en_curso'
+          && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['estado', 'iniciadoAt']);
+      }
+
+      function finalizaAsignado() {
+        return esConductorAsignado()
+          && resource.data.estado == 'en_curso'
+          && request.resource.data.estado == 'finalizado'
+          && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly([
+                'estado',
+                'finalizadoAt',
+                'metodoPago',
+                'driverEarningsUsd',
+                'driverEarningsVes',
+                'platformCommissionUsd',
+                'platformCommissionVes',
+              ]);
+      }
+
+      function liberaAntesDeIniciar() {
+        return esConductorAsignado()
+          && resource.data.estado in ['aceptado', 'llego']
+          && request.resource.data.estado == 'pendiente'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'estado',
+            'conductorId',
+            'conductorNombre',
+            'conductorTelefono',
+            'vehiculoResumen',
+            'aceptadoAt',
+            'llegoAt',
+            'ubicacionConductor',
+            'rumboConductor',
+            'ubicacionConductorEn',
+            'recorrido',
+            'rechazadoPor',
+          ]);
+      }
+
+      function publicaUbicacion() {
+        return esConductorAsignado()
+          && resource.data.estado in ['aceptado', 'llego', 'en_curso']
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'ubicacionConductor',
+            'rumboConductor',
+            'ubicacionConductorEn',
+            'recorrido',
+          ]);
+      }
+
+      function cancelaPasajero() {
+        return esPasajero()
+          && resource.data.estado in ['pendiente', 'aceptado', 'llego']
+          && request.resource.data.estado == 'cancelado'
+          && request.resource.data.canceladoPor == 'pasajero'
+          && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['estado', 'canceladoAt', 'canceladoPor']);
+      }
+
+      function expiraSolicitud() {
+        return esPasajero()
+          && resource.data.estado == 'pendiente'
+          && request.resource.data.estado == 'expirado'
+          && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['estado', 'expiradoAt']);
+      }
+
+      allow create: if estaLogueado()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.estado == 'pendiente'
+        && request.resource.data.tipoServicio in ['mototaxi', 'taxi', 'delivery']
+        && request.resource.data.origenDireccion is string
+        && request.resource.data.destinoDireccion is string
+        && request.resource.data.pasajeroNombre is string;
+
+      allow read: if estaLogueado() && (
+        esPasajero()
+        || esConductorAsignado()
+        || (resource.data.estado == 'pendiente' && esConductorAprobado())
+      );
+
+      allow update: if estaLogueado() && (
+        aceptaPendiente()
+        || marcaRechazo()
+        || llegada()
+        || iniciaViaje()
+        || finalizaAsignado()
+        || liberaAntesDeIniciar()
+        || publicaUbicacion()
+        || cancelaPasajero()
+        || expiraSolicitud()
+      );
+
+      allow delete: if false;
+
+      match /mensajes/{mensajeId} {
+        function viaje() {
+          return get(/databases/$(database)/documents/viajes/$(viajeId)).data;
+        }
+
+        function participa() {
+          return estaLogueado() && (
+            viaje().userId == request.auth.uid
+            || viaje().get('conductorId', '') == request.auth.uid
+          );
+        }
+
+        allow read: if participa();
+        allow create: if participa()
+          && request.resource.data.autorId == request.auth.uid
+          && request.resource.data.texto is string
+          && request.resource.data.texto.size() > 0
+          && request.resource.data.texto.size() <= 400
+          && request.resource.data.keys().hasOnly(['autorId', 'texto', 'createdAt']);
+        allow update, delete: if false;
+      }
+    }
+  }
+}
